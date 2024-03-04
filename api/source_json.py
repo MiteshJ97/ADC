@@ -16,11 +16,11 @@ from django.core.files.base import ContentFile
 # Class to remove the existing file.
 # This will be used when we need to replace the existing file that is stored with the same name.
 
-class OverWriteStorage(FileSystemStorage):
+class Over_write_storage(FileSystemStorage):
     def get_replace_or_create_file(self, name, max_length=None):
         if self.exists(name):
             os.remove(os.path.join(self.location, name))
-            return super(OverWriteStorage, self).get_replace_or_create_file(name, max_length)
+            return super(Over_write_storage, self).get_replace_or_create_file(name, max_length)
 
 
 upload_storage = FileSystemStorage(location=UPLOAD_ROOT, base_url='/uploads')
@@ -40,10 +40,10 @@ def get_file_path(instance, filename):
 
 
 # Model to record logs of downloaded files/folders from FTP/SFTP's
-class SyncFromSource(models.Model):
+class Sync_from_source(models.Model):
     source = models.URLField()
     source_name = models.CharField(max_length=30)
-    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=OverWriteStorage())
+    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=Over_write_storage())
     file_name = models.CharField(max_length=500)
     file_size = models.BigIntegerField(default=0)
     file_type = models.CharField(max_length=20)
@@ -57,21 +57,90 @@ class SyncFromSource(models.Model):
     
 
 # serializer for SyncFromSource model
-class SyncFromSourceSerializers(ModelSerializer):
+class Sync_from_source_serializers(ModelSerializer):
     class Meta:
-        model = SyncFromSource
+        model = Over_write_storage
         fields = '__all__'
 
 
 # views for SyncFromSource
 class SyncFromSourceView(ModelViewSet):
-    queryset = SyncFromSource.objects.all()
-    serializer_class = SyncFromSourceSerializers
+    queryset = Sync_from_source.objects.all()
+    serializer_class = Sync_from_source_serializers
+
+
+
+class URL_to_be_accessed(models.Model):
+    download_URL = models.URLField()
+    resource = models.ForeignKey(Sync_from_source, on_delete=models.CASCADE)
+    bureau_code = models.CharField(max_length=10)
+    modified_on = models.DateField()
+    identifier = models.TextField()
+    access_level = models.TextField()
+    program_code = models.TextField()
+    description = models.TextField()
+    title = models.TextField()
+    media_type = models.TextField()
+    distribution_type = models.TextField()
+    distribution_title = models.TextField()
+    publisher_name = models.TextField()
+    publisher_type = models.TextField()
+    contact_point_email = models.TextField()
+    contact_point_type = models.TextField()
+    contact_point_fn = models.TextField()
+
+    last_accessed_status = models.CharField(max_length=10, default='initial')
+    last_accessed_at = models.DateTimeField(default=datetime.now())
+    next_due_date = models.DateTimeField(null=True)
+
+    def __str__(self):
+        return self.download_URL
+
+
+class URL_to_be_accessed_serializer(ModelSerializer):
+    class Meta:
+        model = URL_to_be_accessed
+        fields = '__all__'
+
+
+class URL_to_be_accessed_view(ModelViewSet):
+    queryset = URL_to_be_accessed.objects.all()
+    serializer_class = URL_to_be_accessed_serializer
+
+
+
+
+
+def make_entry_of_urls(data, bureau_code):
+    a = 0
+    for item in data["dataset"]:
+        obj = URL_to_be_accessed()
+        # Check if the "bureauCode" value matches the desired value
+        if "bureauCode" in item and bureau_code in item["bureauCode"]:
+            obj.bureau_code = bureau_code
+            obj.modified = item["modified"]
+            # Check if the item has a "distribution" field
+            if "distribution" in item:
+                # Iterate through the distributions
+                for distribution in item["distribution"]:
+                    obj.distribution_title = distribution[0]["title"]
+                    obj.distribution_type = distribution[0]["type"]
+                    obj.media_type = distribution[0]["mediaType"]
+                    obj.license = distribution["license"]
+
+                    # Check if the distribution has a "downloadURL" field
+                    if "downloadURL" in distribution:
+                        obj.download_URL = distribution[0]["downloadURL"]
+                        obj.save()
+                        a+=1
+
+    return Response(f'''all done. Total new entry made : {a}''')
 
 
 
 @api_view(['GET'])
-def read_from_source_json(reauest):
+def read_from_source_json(request):
+    bureau_code = 500
     response = requests.get(settings.JSON_SOURCE, verify=False)
     if response.status_code == 200:
         # Retrieve file name and file size from response headers
@@ -83,7 +152,7 @@ def read_from_source_json(reauest):
         file_size = int(response.headers.get('content-length', 0))
         file_type = os.path.splitext(file_name)[1]
 
-        x = SyncFromSource.objects.create(
+        x = Sync_from_source.objects.create(
             file_name = file_name,
             source = settings.JSON_SOURCE,
             processed_on = datetime.today(),
@@ -93,10 +162,11 @@ def read_from_source_json(reauest):
         )
         # save file
         x.file_content.save(file_name, ContentFile(response.content))
+        make_entry_of_urls(x, bureau_code)
         return Response("success")
 
     else:
-        SyncFromSource.objects.create(
+        Sync_from_source.objects.create(
         file_name = '',
         source = settings.JSON_SOURCE,
         processed_on = datetime.today(),
@@ -106,4 +176,3 @@ def read_from_source_json(reauest):
         )
 
     return Response("failed")
-

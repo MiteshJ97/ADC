@@ -11,16 +11,21 @@ from django.conf import settings
 import requests
 from rest_framework.response import Response
 from django.core.files.base import ContentFile
-
+import json
+import requests
+import os
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from .source_json import URL_to_be_accessed
 
 # Class to remove the existing file.
 # This will be used when we need to replace the existing file that is stored with the same name.
 
-class OverWriteStorage(FileSystemStorage):
+class Over_write_storage(FileSystemStorage):
     def get_replace_or_create_file(self, name, max_length=None):
         if self.exists(name):
             os.remove(os.path.join(self.location, name))
-            return super(OverWriteStorage, self).get_replace_or_create_file(name, max_length)
+            return super(Over_write_storage, self).get_replace_or_create_file(name, max_length)
 
 
 upload_storage = FileSystemStorage(location=UPLOAD_ROOT, base_url='/uploads')
@@ -38,12 +43,11 @@ def get_file_path(instance, filename):
         filename
         )
 
-
 # Model to record logs of downloaded files/folders from FTP/SFTP's
-class ResearchDocument(models.Model):
-    source = models.URLField()
+class Research_document(models.Model):
+    source = models.ForeignKey(URL_to_be_accessed, on_delete=models.CASCADE, related_name="documents")
     source_name = models.CharField(max_length=30)
-    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=OverWriteStorage())
+    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=Over_write_storage())
     file_name = models.CharField(max_length=500)
     file_size = models.BigIntegerField(default=0)
     file_type = models.CharField(max_length=20)
@@ -58,60 +62,60 @@ class ResearchDocument(models.Model):
     
 
 # serializer for SyncFromSource model
-class ResearchDocumentSerializer(ModelSerializer):
+class Research_document_serializer(ModelSerializer):
     class Meta:
-        model = ResearchDocument
+        model = Research_document
         fields = '__all__'
 
 
 # views for SyncFromSource
-class SyncFromSourceView(ModelViewSet):
-    queryset = ResearchDocument.objects.all()
-    serializer_class = ResearchDocumentSerializer
+class Sync_from_fource_view(ModelViewSet):
+    queryset = Research_document.objects.all()
+    serializer_class = Research_document_serializer
 
 
-
-def get_from_source_json(url):
-    response = requests.get(url, verify=False)
-    if response.status_code == 200:
-        print(response._content)
-        # Retrieve file name and file size from response headers
-        content_disposition = response.headers.get('content-disposition')
-        if content_disposition:
-            file_name = content_disposition.split('filename=')[1]
-        else:
-            file_name = "xx"  # Use URL as filename if content-disposition is not provided
-        file_size = int(response.headers.get('content-length', 0))
-        file_type = os.path.splitext(file_name)[1]
-
-        x = ResearchDocument.objects.create(
-            file_name = file_name,
-            source = url,
-            processed_on = datetime.datetime.today(),
-            status = 'waiting',
-            file_size = file_size,
-            file_type = file_type
-        )
-        # save file
-        x.file_content.save('filename', ContentFile(response.content))
-        return True
-
-    else:
-        ResearchDocument.objects.create(
-        file_name = '',
-        source = settings.JSON_SOURCE,
-        processed_on = datetime.datetime.today(),
-        status = 'failed',
-        file_size = 0,
-        file_type = 'none'
-        )
-
-    return False
 
 
 @api_view(['GET'])
-def read_from_source_json(reauest):
-    state = get_from_source_json()
-    if state:
-        pass
+def download_research_documents(request):
+    x = URL_to_be_accessed.objects.filter(last_accessed_status__in = ('failed', 'initial'))
+    for url in x:
+        response = requests.get(x.download_URL, verify=False)
+        if response.status_code == 200:
+            # Retrieve file name and file size from response headers
+            content_disposition = response.headers.get('content-disposition')
+            if content_disposition:
+                file_name = content_disposition.split('filename=')[1]
+            else:
+                file_name = "xx"  # Use URL as filename if content-disposition is not provided
+            file_size = int(response.headers.get('content-length', 0))
+            file_type = os.path.splitext(file_name)[1]
 
+            x = Research_document.objects.create(
+                file_name = file_name,
+                source = url,
+                processed_on = datetime.today(),
+                status = 'waiting',
+                file_size = file_size,
+                file_type = file_type
+            )
+            # save file
+            x.file_content.save('filename', ContentFile(response.content))
+            source = x.get(source)
+            source.last_accessed_status = 'success'
+            source.last_accessed_at = datetime.now()
+            source.save()
+            
+            return x
+
+        else:
+            x = Research_document.objects.create(
+            file_name = '',
+            source = settings.JSON_SOURCE,
+            processed_on = datetime.today(),
+            status = 'failed',
+            file_size = 0,
+            file_type = 'none'
+            )
+
+    return Response("suuccessfully executed")
