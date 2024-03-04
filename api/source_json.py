@@ -140,7 +140,7 @@ def make_entry_of_urls(data, bureau_code):
 
 @api_view(['GET'])
 def read_from_source_json(request):
-    bureau_code = 500
+    bureau_code = "005:12"
     response = requests.get(settings.JSON_SOURCE, verify=False)
     if response.status_code == 200:
         # Retrieve file name and file size from response headers
