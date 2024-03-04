@@ -47,7 +47,7 @@ def get_file_path(instance, filename):
 class Research_document(models.Model):
     source = models.ForeignKey(URL_to_be_accessed, on_delete=models.CASCADE, related_name="documents")
     source_name = models.CharField(max_length=30)
-    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=Over_write_storage())
+    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=Over_write_storage)
     file_name = models.CharField(max_length=500)
     file_size = models.BigIntegerField(default=0)
     file_type = models.CharField(max_length=20)

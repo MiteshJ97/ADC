@@ -5,6 +5,7 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.serializers import ModelSerializer
 from datetime import datetime
 
+import json
 from economy_research_service.settings import UPLOAD_ROOT
 from rest_framework.decorators import api_view
 from django.conf import settings
@@ -23,6 +24,7 @@ class Over_write_storage(FileSystemStorage):
             return super(Over_write_storage, self).get_replace_or_create_file(name, max_length)
 
 
+# upload storage location
 upload_storage = FileSystemStorage(location=UPLOAD_ROOT, base_url='/uploads')
 
 # Function to return the storage file path.
@@ -43,7 +45,7 @@ def get_file_path(instance, filename):
 class Sync_from_source(models.Model):
     source = models.URLField()
     source_name = models.CharField(max_length=30)
-    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=Over_write_storage())
+    file_content = models.FileField(upload_to=get_file_path, blank=True, null=True, storage=Over_write_storage)
     file_name = models.CharField(max_length=500)
     file_size = models.BigIntegerField(default=0)
     file_type = models.CharField(max_length=20)
@@ -59,7 +61,7 @@ class Sync_from_source(models.Model):
 # serializer for SyncFromSource model
 class Sync_from_source_serializers(ModelSerializer):
     class Meta:
-        model = Over_write_storage
+        model = Sync_from_source
         fields = '__all__'
 
 
@@ -69,25 +71,26 @@ class SyncFromSourceView(ModelViewSet):
     serializer_class = Sync_from_source_serializers
 
 
-
+ 
 class URL_to_be_accessed(models.Model):
     download_URL = models.URLField()
-    resource = models.ForeignKey(Sync_from_source, on_delete=models.CASCADE)
+    resource = models.IntegerField(null=True)
     bureau_code = models.CharField(max_length=10)
-    modified_on = models.DateField()
-    identifier = models.TextField()
-    access_level = models.TextField()
-    program_code = models.TextField()
-    description = models.TextField()
-    title = models.TextField()
-    media_type = models.TextField()
-    distribution_type = models.TextField()
-    distribution_title = models.TextField()
-    publisher_name = models.TextField()
-    publisher_type = models.TextField()
-    contact_point_email = models.TextField()
-    contact_point_type = models.TextField()
-    contact_point_fn = models.TextField()
+    modified_on = models.DateField(null=True)
+    identifier = models.TextField(null=True)
+    access_level = models.TextField(null=True)
+    program_code = models.TextField(null=True)
+    description = models.TextField(null=True)
+    title = models.TextField(null=True)
+    media_type = models.TextField(null=True)
+    distribution_type = models.TextField(null=True)
+    distribution_title = models.TextField(null=True)
+    publisher_name = models.TextField(null=True)
+    publisher_type = models.TextField(null=True)
+    contact_point_email = models.TextField(null=True)
+    contact_point_type = models.TextField(null=True)
+    contact_point_fn = models.TextField(null=True)
+    license = models.TextField(null=True)
 
     last_accessed_status = models.CharField(max_length=10, default='initial')
     last_accessed_at = models.DateTimeField(default=datetime.now())
@@ -111,31 +114,73 @@ class URL_to_be_accessed_view(ModelViewSet):
 
 
 
-def make_entry_of_urls(data, bureau_code):
-    a = 0
-    for item in data["dataset"]:
+def make_entry_of_urls(response, resource_instance, bureau_code):
+    json_data_1 = json.loads(response._content.decode('utf-8'))
+    data = json_data_1["dataset"]
+    result = []
+    for item in data:
         obj = URL_to_be_accessed()
-        # Check if the "bureauCode" value matches the desired value
-        if "bureauCode" in item and bureau_code in item["bureauCode"]:
-            obj.bureau_code = bureau_code
-            obj.modified = item["modified"]
-            # Check if the item has a "distribution" field
-            if "distribution" in item:
-                # Iterate through the distributions
-                for distribution in item["distribution"]:
-                    obj.distribution_title = distribution[0]["title"]
-                    obj.distribution_type = distribution[0]["type"]
-                    obj.media_type = distribution[0]["mediaType"]
-                    obj.license = distribution["license"]
+        obj.identifier = item.get("identifier", None)
+        obj.access_level = item.get("accessLevel", None)
+        # obj.program_code = item.get("program_code", None)
+        obj.description = item.get("description", None)
+        obj.publisher_type = item["publisher"].get('@type', None)
+        obj.publisher_name = item["publisher"].get('name', None)
 
-                    # Check if the distribution has a "downloadURL" field
-                    if "downloadURL" in distribution:
-                        obj.download_URL = distribution[0]["downloadURL"]
-                        obj.save()
-                        a+=1
+        obj.contact_point_email = (item["contactPoint"].get('hasEmail', None)).split(':')[1]
+        obj.contact_point_type = item["contactPoint"].get('@type', None)
+        obj.contact_point_fn = item["contactPoint"].get('fn', None)
+        # obj.modified_on = item.get("modified", datetime.now())		
+        obj.modified_on = item["modified"]	
+        obj.license = item.get("license", None)			
+        obj.resource = resource_instance.id
 
-    return Response(f'''all done. Total new entry made : {a}''')
+        for codes in item['bureauCode']:
+            if codes == bureau_code:
+                obj.bureau_code = bureau_code
+                for distribution in item['distribution']:
+                    obj.distribution_title = distribution.get("title", None)
+                    obj.distribution_type = distribution.get("@type", None)
+                    obj.media_type = distribution.get("mediaType", None)
+                    obj.download_URL = distribution["downloadURL"]
+                    if not (
+                        URL_to_be_accessed.objects.filter(
+                            download_URL=distribution["downloadURL"], 
+                            modified_on=item["modified"]
+                            ).exists()
+                        ):
+                        result.append(obj)
 
+    try:
+        URL_to_be_accessed.objects.bulk_create(result)
+        return True
+    except Exception as e:
+        resource_instance.status="failed"
+        resource_instance.save()
+        return False
+
+
+
+
+
+# @api_view(['GET'])
+# def read_from_source_json(request):
+#     bureau_code = "005:12"
+#     response = requests.get(settings.JSON_SOURCE, verify=False)
+#     json_data_1 = json.loads(response._content.decode('utf-8'))
+#     x = json_data_1["dataset"]
+#     data = []
+#     for item in x:
+#         for codes in item['bureauCode']:
+#             if codes == '005:12':
+#                 for dist in item['distribution']:
+#                     data.append(dist['downloadURL'])
+#                     print("###")
+#                 continue
+#             else:
+#                 print("EEE")
+
+#     return Response(data)
 
 
 @api_view(['GET'])
@@ -148,22 +193,26 @@ def read_from_source_json(request):
         if content_disposition:
             file_name = content_disposition.split('filename=')[1]
         else:
-            file_name = "xx"  # Use URL as filename if content-disposition is not provided
+            file_name = "data.json"  # Use URL as filename if content-disposition is not provided
         file_size = int(response.headers.get('content-length', 0))
-        file_type = os.path.splitext(file_name)[1]
+        # file_type = os.path.splitext(file_name)[1]
 
-        x = Sync_from_source.objects.create(
+        resource_instance = Sync_from_source.objects.create(
             file_name = file_name,
             source = settings.JSON_SOURCE,
             processed_on = datetime.today(),
             status = 'success',
             file_size = file_size,
-            file_type = file_type
+            file_type = "json"
         )
         # save file
-        x.file_content.save(file_name, ContentFile(response.content))
-        make_entry_of_urls(x, bureau_code)
-        return Response("success")
+        resource_instance.file_content.save(file_name, ContentFile(response.content))
+
+        res = make_entry_of_urls(response, resource_instance, bureau_code)
+        if res:
+            return Response("success")
+        else:
+            return Response("failed")
 
     else:
         Sync_from_source.objects.create(
